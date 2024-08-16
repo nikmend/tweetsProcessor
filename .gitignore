@@ -1,1 +1,2 @@
 data/tweets.json.zip
+src/__pycache__/*
