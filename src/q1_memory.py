@@ -1,79 +1,62 @@
-from typing import List, Tuple
-from datetime import datetime
-from memory_profiler import profile
-import zipfile
 import json
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, count, desc, date_format
-from pyspark import StorageLevel
-import os
-import sys
-
-# The top 10 dates where there are more tweets. Mention the user (username) that 
-# has the most posts for each of those days. 
+from collections import defaultdict, Counter
+from typing import List, Tuple
+import zipfile
+import datetime
+from memory_profiler import profile
 
 @profile
-def q1_memory(zip_file_path: str) -> List[Tuple[datetime.date, str]]:
+def q1_memory(file_path: str) -> List[Tuple[datetime.date, str]]:
     """
-    It parses a zip file containing tweets in JSONL format, identifies the 10 dates with the most tweets and determines the user with the most tweets for each of those dates. The function also measures memory usage.
+    Analyzes tweet data from a JSON file contained within a zip archive to identify the 
+    most active user for the top 10 dates with the highest tweet counts, optimizing memory usage.
 
-    Args: zip_file_path (str): The path to the zip file containing the JSONL file with tweet data.
+    This function decompresses a zip file containing JSON formatted tweet data, loads the data in 
+    batches, and counts the number of tweets per user for each date. It then finds the 10 dates 
+    with the most tweets and returns the user with the most tweets for each of those dates.
 
-    Returns: List[Tuple[datetime.date, str]]: A list of tuples, where each tuple contains a date (`datetime.date`) and the name of the user with the most tweets on that date (`str`).
+    Memory profiling is applied to measure memory usage during the function execution.
 
-
-    Process:
-        Extract the JSONL file from the zip archive into a temporary directory. 
-        Use PySpark to read the JSONL file and select the necessary columns (date and username).        
-        Extract the JSONL file from the zip archive into a temporary directory.  
-        Use PySpark to read the JSONL file and select the necessary columns (date and username).  
-        Group the tweets by date and user, counting the number of tweets. 
-        Identify the 10 dates with the most tweets, then find the user who posted the most tweets on each of those dates.
-        Clean up the temporary files and the directory used for extraction. 
-        Return the list of the 10 dates with the most tweets along with the most active user on each.
+    Args:
+        file_path (str): The path to the zip file containing JSON formatted tweet data.
+    
+    Returns:
+        List[Tuple[datetime.date, str]]: A list of tuples where each tuple contains a date 
+        and the username of the most active user for that date, limited to the top 10 most active days.
     """
+    date_user_counter = defaultdict(Counter)
     
-
-    spark = SparkSession.builder.appName("q1_memory").getOrCreate()
-    temp_dir  ='tmp_file'
+    with zipfile.ZipFile(file_path, 'r') as z:
+        with z.open(z.namelist()[0]) as f:
+            buffer = []
+            for line in f:
+                tweet = json.loads(line)
+                buffer.append(tweet)
+                
+                if len(buffer) >= 1000:
+                    for tweet in buffer:
+                        date = tweet.get('date')
+                        username = tweet.get('user', {}).get('username')
+                        
+                        if date and username:
+                            date = datetime.datetime.fromisoformat(date).date()
+                            date_user_counter[date].update([username])
+                    
+                    buffer.clear()
+            
+            # Procesar cualquier tweet restante en el buffer
+            for tweet in buffer:
+                date = tweet.get('date')
+                username = tweet.get('user', {}).get('username')
+                
+                if date and username:
+                    date = datetime.datetime.fromisoformat(date).date()
+                    date_user_counter[date].update([username])
     
-    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-        zip_ref.extractall(temp_dir )
-
-    df = spark.read.json(temp_dir )
-
-    df = df.select(date_format(col("date"), "yyyy-MM-dd").alias("date"), col("user.username").alias("username"))
-
-    df.persist(StorageLevel.DISK_ONLY)
-
-    grouped_df = df.groupBy("date", "username").agg(count("*").alias("tweet_count"))
-
-    result = (grouped_df
-              .groupBy("date")
-              .agg({"tweet_count": "max"})
-              .orderBy(desc("max(tweet_count)"))
-              .limit(10))
-
-    top_10_dates = result.collect()
-
-    top_10_with_user : List[Tuple[datetime.date, str]] = []
-    for row in top_10_dates:
-        date = row['date']
-        max_tweets = row['max(tweet_count)']
-        date_obj = datetime.strptime(date, "%Y-%m-%d").date()
-
-        user_row = grouped_df.filter((col("date") == date) & (col("tweet_count") == max_tweets)).select("username").limit(1).collect()[0]
-        top_10_with_user.append((date_obj, user_row["username"]))
-
-
+    # Encontramos las 10 fechas con más tweets
+    top_dates = sorted(date_user_counter.keys(), key=lambda d: sum(date_user_counter[d].values()), reverse=True)[:10]
     
-    for filename in os.listdir(temp_dir):
-            file_path = os.path.join(temp_dir, filename)
-            os.unlink(file_path)
-    os.rmdir(temp_dir)
-    return top_10_with_user
-
-
-if __name__ == "__main__":
-    zip_file_path = sys.argv[1]
-    q1_memory(zip_file_path)
+    # Para cada fecha, encontramos el usuario con más publicaciones
+    result = [(date, date_user_counter[date].most_common(1)[0][0]) for date in top_dates]
+    
+    return result

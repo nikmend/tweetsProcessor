@@ -1,44 +1,46 @@
 import json
-import pandas as pd
-from multiprocessing import Pool
-from datetime import datetime
-import zipfile
+from collections import defaultdict, Counter
 from typing import List, Tuple
+import zipfile
+import datetime
+from memory_profiler import profile
 
-def process_chunk(chunk):
-    # Procesa un chunk de datos JSON
-    data = [json.loads(line) for line in chunk]
-    df = pd.DataFrame(data)
-    df['date'] = pd.to_datetime(df['date']).dt.date
-    return df[['date', 'user']].groupby(['date', 'user']).size().reset_index(name='counts')
-
+@profile
 def q1_time(file_path: str) -> List[Tuple[datetime.date, str]]:
-    # Abrir el archivo JSONL
-    with open(file_path, 'rb') as zip_file:
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-            jsonl_file_name = [f for f in zip_ref.namelist() if f.endswith('.json')][0]
+    """
+    Analyzes tweet data from a JSON file contained within a zip archive to identify the 
+    most active user for the top 10 dates with the highest tweet counts.
 
-            print('# Leer el archivo JSONL en memoria con utf-8 encoding')
-            with zip_ref.open(jsonl_file_name) as jsonl_file:
-                lines = jsonl_file.read().decode('utf-8').splitlines()
+    This function decompresses a zip file containing JSON formatted tweet data, processes 
+    each tweet to count the number of tweets per user for each date, and then identifies 
+    the top 10 dates with the most tweets. For each of these dates, it returns the user 
+    who tweeted the most on that day.
 
-                print('# Dividir el archivo en chunks para paralelización')
-                chunk_size = len(lines) // 4  # Procesar en 4 núcleos
-                chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
+    Memory profiling is applied to measure memory usage during the function execution.
 
-                print('# Procesar los chunks en paralelo')
-                with Pool(4) as pool:
-                    results = pool.map(process_chunk, chunks)
-
-                print('# Combinar resultados')
-                df_combined = pd.concat(results)
-
-                print('# Obtener top 10 fechas con más tweets y el usuario con más tweets')
-                top_10_dates = df_combined.groupby('date')['counts'].sum().nlargest(10)
-
-                result = []
-                for date in top_10_dates.index:
-                    max_user = df_combined[df_combined['date'] == date].groupby('user')['counts'].sum().idxmax()
-                    result.append((date, max_user))
-
-                return result
+    Args:
+        file_path (str): The path to the zip file containing JSON formatted tweet data.
+    
+    Returns:
+        List[Tuple[datetime.date, str]]: A list of tuples where each tuple contains a date 
+        and the username of the most active user for that date, limited to the top 10 most active days.
+    """
+    date_user_counter = defaultdict(Counter)
+    
+    with zipfile.ZipFile(file_path, 'r') as z:
+        with z.open(z.namelist()[0]) as f:
+            for line in f:
+                tweet = json.loads(line)
+                date = tweet.get('date')
+                username = tweet.get('user', {}).get('username')
+                if date and username:
+                    date = datetime.datetime.fromisoformat(date).date()
+                    date_user_counter[date].update([username])
+    
+    # Encontramos las 10 fechas con más tweets
+    top_dates = sorted(date_user_counter.keys(), key=lambda d: sum(date_user_counter[d].values()), reverse=True)[:10]
+    
+    # Para cada fecha, encontramos el usuario con más publicaciones
+    result = [(date, date_user_counter[date].most_common(1)[0][0]) for date in top_dates]
+    
+    return result
