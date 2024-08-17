@@ -20,15 +20,14 @@ def q2_memory(file_path: str) -> List[Tuple[str, int]]:
             for line in f:
                 tweet = json.loads(line)
                 buffer.append(tweet.get('content', ''))
-                
-                # Procesa el buffer cuando llega a un tamaño adecuado
+                # Processes the buffer when it reaches a suitable size
                 if len(buffer) >= 1000:
                     for tweet_text in buffer:
                         emojis = extract_emojis(tweet_text)
                         emoji_counter.update(emojis)
                     buffer.clear()
             
-            # Procesar cualquier tweet restante en el buffer
+            # Process any remaining tweets in the buffer
             for tweet_text in buffer:
                 emojis = extract_emojis(tweet_text)
                 emoji_counter.update(emojis)
